@@ -1,0 +1,140 @@
+#define BLYNK_TEMPLATE_ID "TMPL3WImo7aMA"
+#define BLYNK_TEMPLATE_NAME "temp"
+#define BLYNK_AUTH_TOKEN "ehem55vQcpPV5jHog_bIupOC7j30veVi"
+#define BLYNK_PRINT Serial
+#include <ESP8266WiFi.h>
+#include <BlynkSimpleEsp8266.h>
+#include <TinyGPS++.h>
+#include <SoftwareSerial.h>
+// WiFi Credentials
+char ssid[] = "projecthub";
+char pass[] = "projecthub@1234";
+// Auth Token
+char auth[] = BLYNK_AUTH_TOKEN;
+// GPS Setup
+SoftwareSerial GPS_SoftSerial(D2, D1);  // RX, TX
+TinyGPSPlus gps;
+// SIM800L Setup
+SoftwareSerial sim800l(D8, D3);  // RX, TX
+// Pins
+#define IR_SENSOR_PIN D4
+#define BUZZER_PIN D7
+#define SLEEP_INDICATOR_LED D6
+#define WAKE_BUTTON_PIN D5
+#define EMERGENCY_BUTTON D0
+// Sleep Detection
+unsigned long lastMotionTime = 0;
+unsigned long sleepDelay = 10000;
+bool flag = false;
+bool eventSent = false;
+bool alertActive = false;
+// Timer
+BlynkTimer timer;
+void setup() {
+  Serial.begin(9600);
+  GPS_SoftSerial.begin(9600);
+  sim800l.begin(9600);
+  pinMode(IR_SENSOR_PIN, INPUT);
+  pinMode(SLEEP_INDICATOR_LED, OUTPUT);
+  pinMode(BUZZER_PIN, OUTPUT);
+  pinMode(WAKE_BUTTON_PIN, INPUT_PULLUP);
+  pinMode(EMERGENCY_BUTTON, INPUT_PULLUP);
+  digitalWrite(BUZZER_PIN, LOW);
+  digitalWrite(SLEEP_INDICATOR_LED, LOW);
+  Blynk.begin(auth, ssid, pass);
+  timer.setInterval(500L, checkDriverState);
+}
+void loop() 
+{
+  Blynk.run();
+  timer.run();
+  while (GPS_SoftSerial.available())
+  {
+    gps.encode(GPS_SoftSerial.read());
+  }
+}
+void checkDriverState() 
+{
+  int motion = digitalRead(IR_SENSOR_PIN);
+  int buttonState = digitalRead(WAKE_BUTTON_PIN);
+  int emergencyState = digitalRead(EMERGENCY_BUTTON);
+  if (motion == LOW) 
+ {
+    lastMotionTime = millis();
+    digitalWrite(SLEEP_INDICATOR_LED, LOW);
+    flag = false;
+    eventSent = false;
+    alertActive = false;
+  }
+else 
+{
+    if ((millis() - lastMotionTime > sleepDelay) && !flag) 
+   {
+      digitalWrite(SLEEP_INDICATOR_LED, HIGH);
+      Serial.println("Sleep detected");
+      flag = true;
+      digitalWrite(BUZZER_PIN, HIGH);
+      delay(5000);  // Wait 5 seconds
+      digitalWrite(BUZZER_PIN, LOW);
+      if (digitalRead(IR_SENSOR_PIN) == HIGH) 
+      {
+        // Still no movement
+        sendAllAlerts();
+        alertActive = true;
+      }
+    }
+  if (buttonState == LOW && !eventSent) 
+  {
+    sendLocationToBlynk();
+    eventSent = true;
+  }
+  if (emergencyState == LOW) 
+  {
+    sendEmergencyMessage();
+  }
+}
+void sendLocationToBlynk() 
+{
+  double lat = gps.location.lat();
+  double lon = gps.location.lng();
+  if (!gps.location.isValid()) 
+  {
+    lat = 18.5204;  // Pune fallback
+    lon = 73.8567;
+  }
+  char message[100];
+  sprintf(message, "Location: https://maps.google.com/?q=%.6f,%.6f", lat, lon);
+  Blynk.logEvent("theft_alert_in_home", message);
+  Serial.println(message);
+}
+void sendAllAlerts() 
+{
+  sendLocationToBlynk();
+  sendSMS("Driver may be asleep! Check location.");
+  makeCall();
+}
+void sendEmergencyMessage() 
+{
+  sendSMS("Emergency! Check driver's location.");
+  makeCall();
+  sendLocationToBlynk();
+}
+void sendSMS(String text) 
+{
+  sim800l.println("AT+CMGF=1");
+  delay(100);
+  sim800l.println("AT+CMGS=\"+91XXXXXXXXXX\""); // <-- Enter recipient's number
+  delay(100);
+  sim800l.print(text);
+  delay(100);
+  sim800l.write(26); // CTRL+Z
+  delay(500);
+  Serial.println("SMS sent");
+}
+void makeCall() 
+{
+  sim800l.println("ATD+91XXXXXXXXXX;");  // <-- Enter recipient's number
+  Serial.println("Calling...");
+  delay(10000); // 10 seconds call
+  sim800l.println("ATH"); // Hang up
+}
